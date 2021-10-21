@@ -8,13 +8,18 @@ phylotorch-bito is a package providing an interface to [BITO] for [phylotorch]
 
 ## Installation
 
-### Get the phylotorch source
+### Get the source code
 ```bash
 git clone https://github.com/4ment/phylotorch-bito
 cd phylotorch-bito
 ```
 
-### Quick start
+### Install using pip
+```bash
+python setup.py install
+```
+
+## Quick start
 ```bash
 phylotorch examples/advi/fluA-HKY.json
 ```

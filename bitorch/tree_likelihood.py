@@ -3,8 +3,8 @@ import tempfile
 from collections import namedtuple
 from typing import Union
 
-import libsbn
-import libsbn.beagle_flags as beagle_flags
+import bito
+import bito.beagle_flags as beagle_flags
 import numpy as np
 import torch
 from phylotorch.core.model import CallableModel
@@ -101,10 +101,10 @@ class TreeLikelihoodModel(CallableModel):
 
         if BranchModel.tag in data:
             clock_model = process_object(data[BranchModel.tag], dic)
-            inst = libsbn.rooted_instance(id_)
+            inst = bito.rooted_instance(id_)
         else:
             clock_model = None
-            inst = libsbn.unrooted_instance(id_)
+            inst = bito.unrooted_instance(id_)
 
         if 'file' in data[TreeModel.tag]:
             inst.read_newick_file(data[TreeModel.tag]['file'])
@@ -153,11 +153,11 @@ class TreeLikelihoodModel(CallableModel):
                 inst.set_dates_to_be_constant(False)
             else:
                 inst.parse_dates_from_taxon_names(False)
-            spec = libsbn.PhyloModelSpecification(
+            spec = bito.PhyloModelSpecification(
                 substitution=model_name, site=site_name, clock=clock_name
             )
         else:
-            spec = libsbn.PhyloModelSpecification(
+            spec = bito.PhyloModelSpecification(
                 substitution=model_name, site=site_name, clock='strict'
             )
 
@@ -183,7 +183,7 @@ Gradient = namedtuple(
 
 class TreeLikelihoodAutogradFunction(torch.autograd.Function):
     @staticmethod
-    def update_libsbn(
+    def update_bito(
         inst,
         branch_lengths,
         clock_rates,
@@ -204,7 +204,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
             # inst.tree_collection.trees[0].set_strict_clock(clock_rates)
             inst_rates = np.array(inst.tree_collection.trees[0].rates, copy=False)
             inst_rates[:] = clock_rates[batch_idx, :].detach().numpy()
-            # libsbn does not use phylo_model_param_block_map for clock rates
+            # bito does not use phylo_model_param_block_map for clock rates
             # phylo_model_param_block_map["clock rate"][:] = clock.detach().numpy()
         else:
             inst_branch_lengths = np.array(
@@ -243,34 +243,34 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
         subst_frequencies_grad = None
         weibull_grad = None
 
-        libsbn_result = inst.phylo_gradients()[0]
+        bito_result = inst.phylo_gradients()[0]
 
         if clock_rates is not None:
             branch_grad = torch.tensor(
-                np.array(libsbn_result.gradient['ratios_root_height'])
+                np.array(bito_result.gradient['ratios_root_height'])
             )
             clock_rate_grad = torch.tensor(
-                np.array(libsbn_result.gradient['clock_model'])
+                np.array(bito_result.gradient['clock_model'])
             )
         else:
             branch_grad = torch.tensor(
-                np.array(libsbn_result.gradient['branch_lengths'])[:-2]
+                np.array(bito_result.gradient['branch_lengths'])[:-2]
             )
 
         if subst_rates is not None:
             substitution_model_grad = np.array(
-                libsbn_result.gradient['substitution_model']
+                bito_result.gradient['substitution_model']
             )
             subst_rates_grad = torch.tensor(substitution_model_grad[:-3])
 
         if subst_frequencies is not None:
             substitution_model_grad = np.array(
-                libsbn_result.gradient['substitution_model']
+                bito_result.gradient['substitution_model']
             )
             subst_frequencies_grad = torch.tensor(substitution_model_grad[-3:])
 
         if weibull_shape is not None:
-            weibull_grad = torch.tensor(np.array(libsbn_result.gradient['site_model']))
+            weibull_grad = torch.tensor(np.array(bito_result.gradient['site_model']))
 
         return Gradient(
             branch_grad,
@@ -304,7 +304,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
         all_grad = []
 
         for batch_idx in range(branch_lengths.shape[0]):
-            TreeLikelihoodAutogradFunction.update_libsbn(
+            TreeLikelihoodAutogradFunction.update_bito(
                 inst,
                 branch_lengths,
                 clock_rates,
@@ -345,7 +345,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
             all_grads = []
             for batch_idx in range(grad_output.shape[0]):
                 if grad_output.shape[0] > 1:
-                    TreeLikelihoodAutogradFunction.update_libsbn(
+                    TreeLikelihoodAutogradFunction.update_bito(
                         ctx.inst,
                         branch_lengths,
                         clock_rates,

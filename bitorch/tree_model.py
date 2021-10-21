@@ -1,4 +1,4 @@
-import libsbn
+import bito
 import numpy as np
 import phylotorch.evolution.tree_model
 import torch
@@ -65,7 +65,7 @@ class NodeHeightAutogradFunction(torch.autograd.Function):
         for batch_idx in range(grad_output.shape[0]):
             grad.append(
                 torch.tensor(
-                    libsbn.ratio_gradient_of_height_gradient(
+                    bito.ratio_gradient_of_height_gradient(
                         ctx.inst.tree_collection.trees[0],
                         grad_output_numpy[batch_idx, ...],
                     )
