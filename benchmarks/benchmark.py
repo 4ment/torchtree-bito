@@ -5,8 +5,8 @@ import os
 import tempfile
 from timeit import default_timer as timer
 
-import libsbn as bito
-import libsbn.beagle_flags as beagle_flags
+import bito
+import bito.beagle_flags as beagle_flags
 import numpy as np
 import torch
 from phylotorch.io import read_tree
@@ -88,7 +88,7 @@ def gradient_tree_likelihood(inst, branch_lengths):
     return log_prob.backward()
 
 
-def fluA_unrooted(args):
+def unrooted_treelikelihood(args):
     tree = read_tree(args.tree, False, False)
 
     inst = create_instance(False, tree, args)
@@ -102,8 +102,12 @@ def fluA_unrooted(args):
     print(f'  {args.replicates} evaluations: {total_time} ({log_prob})')
 
     branch_lengths.requires_grad = True
-    total_time, _ = gradient_tree_likelihood(args.replicates, inst, branch_lengths)
-    print(f'  {args.replicates} gradient evaluations: {total_time}')
+    grad_total_time, _ = gradient_tree_likelihood(args.replicates, inst, branch_lengths)
+    print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
+
+    if args.output:
+        args.output.write(f"treelikelihood,evaluation,off,{total_time}\n")
+        args.output.write(f"treelikelihood,gradient,off,{grad_total_time}\n")
 
 
 @benchmark
@@ -164,26 +168,41 @@ def ratio_transform_jacobian(args):
     total_time, log_p = transform_jacobian(args.replicates, inst, branch_lengths)
     print(f'  {args.replicates} evaluations: {total_time} ({log_p})')
 
-    total_time, _ = gradient_transform_jacobian(args.replicates, inst, branch_lengths)
-    print(f'  {args.replicates} gradient evaluations: {total_time}')
+    grad_total_time, _ = gradient_transform_jacobian(args.replicates, inst, branch_lengths)
+    print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
+
+    if args.output:
+        args.output.write(f"ratio_transform_jacobian,evaluation,off,{total_time}\n")
+        args.output.write(f"ratio_transform_jacobian,gradient,off,{grad_total_time}\n")
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-i', '--input', required=True, help="""Alignment file""")
 parser.add_argument('-t', '--tree', required=True, help="""Tree file""")
 parser.add_argument(
+    '-r',
     '--replicates',
     required=True,
     type=int,
     help="""Number of replicates""",
 )
 parser.add_argument(
+    "-o",
+    "--output",
+    type=argparse.FileType("w"),
+    default=None,
+    help="""csv output file""",
+)
+parser.add_argument(
     '--debug', required=False, action='store_true', help="""Debug mode"""
 )
 args = parser.parse_args()
 
+if args.output:
+    args.output.write("function,mode,JIT,time\n")
+
 print('Tree likelihood unrooted:')
-fluA_unrooted(args)
+unrooted_treelikelihood(args)
 print()
 
 print('Height transform log det Jacobian:')
@@ -192,3 +211,6 @@ print()
 
 print('Node height transform:')
 ratio_transform(args)
+
+if args.output:
+    args.output.close()
