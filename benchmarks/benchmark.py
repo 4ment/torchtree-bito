@@ -168,7 +168,9 @@ def ratio_transform_jacobian(args):
     total_time, log_p = transform_jacobian(args.replicates, inst, branch_lengths)
     print(f'  {args.replicates} evaluations: {total_time} ({log_p})')
 
-    grad_total_time, _ = gradient_transform_jacobian(args.replicates, inst, branch_lengths)
+    grad_total_time, _ = gradient_transform_jacobian(
+        args.replicates, inst, branch_lengths
+    )
     print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
 
     if args.output:
@@ -205,9 +207,12 @@ print('Tree likelihood unrooted:')
 unrooted_treelikelihood(args)
 print()
 
-print('Height transform log det Jacobian:')
-ratio_transform_jacobian(args)
-print()
+try:
+    print('Height transform log det Jacobian:')
+    ratio_transform_jacobian(args)
+    print()
+except AttributeError:
+    pass
 
 print('Node height transform:')
 ratio_transform(args)
