@@ -9,7 +9,7 @@ import bito
 import bito.beagle_flags as beagle_flags
 import numpy as np
 import torch
-from phylotorch.io import read_tree
+from torchtree.evolution.io import read_tree
 
 from bitorch.tree_likelihood import TreeLikelihoodAutogradFunction
 from bitorch.tree_model import NodeHeightAutogradFunction
