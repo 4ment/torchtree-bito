@@ -7,20 +7,20 @@ import bito
 import bito.beagle_flags as beagle_flags
 import numpy as np
 import torch
-from phylotorch.core.model import CallableModel
-from phylotorch.core.parameter import TransformedParameter
-from phylotorch.core.utils import JSONParseError, process_object
-from phylotorch.evolution.alignment import Alignment
-from phylotorch.evolution.branch_model import BranchModel
-from phylotorch.evolution.site_model import SiteModel
-from phylotorch.evolution.substitution_model import SubstitutionModel
-from phylotorch.evolution.tree_model import (
+from torch.distributions import StickBreakingTransform
+from torchtree.core.model import CallableModel
+from torchtree.core.parameter import TransformedParameter
+from torchtree.core.utils import JSONParseError, process_object
+from torchtree.evolution.alignment import Alignment
+from torchtree.evolution.branch_model import BranchModel
+from torchtree.evolution.site_model import SiteModel
+from torchtree.evolution.substitution_model import SubstitutionModel
+from torchtree.evolution.tree_model import (
     ReparameterizedTimeTreeModel,
     TreeModel,
     UnRootedTreeModel,
 )
-from phylotorch.typing import ID
-from torch.distributions import StickBreakingTransform
+from torchtree.typing import ID
 
 
 class TreeLikelihoodModel(CallableModel):

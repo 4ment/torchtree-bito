@@ -1,17 +1,17 @@
-# phylotorch-bito
+# torchtree-bito
 
-phylotorch-bito is a package providing an interface to [BITO] for [phylotorch]
+torchtree-bito is a package providing an interface to [BITO] for [torchtree]
 
 ## Dependencies
- - [phylotorch]
+ - [torchtree]
  - [BITO]
 
 ## Installation
 
 ### Get the source code
 ```bash
-git clone https://github.com/4ment/phylotorch-bito
-cd phylotorch-bito
+git clone https://github.com/4ment/torchtree-bito
+cd torchtree-bito
 ```
 
 ### Install using pip
@@ -21,8 +21,8 @@ python setup.py install
 
 ## Quick start
 ```bash
-phylotorch examples/advi/fluA-HKY.json
+torchtree examples/advi/fluA-HKY.json
 ```
 
-[phylotorch]: https://github.com/4ment/phylotorch
+[torchtree]: https://github.com/4ment/torchtree
 [BITO]: https://github.com/phylovi/bito

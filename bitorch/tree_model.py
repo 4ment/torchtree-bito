@@ -1,19 +1,19 @@
 import bito
 import numpy as np
-import phylotorch.evolution.tree_model
 import torch
-from phylotorch.core.abstractparameter import AbstractParameter
-from phylotorch.evolution.taxa import Taxa
-from phylotorch.evolution.tree_model import (
+import torchtree.evolution.tree_model
+from torch import Tensor
+from torchtree.core.abstractparameter import AbstractParameter
+from torchtree.evolution.taxa import Taxa
+from torchtree.evolution.tree_model import (
     ReparameterizedTimeTreeModel as BaseReparameterizedTimeTreeModel,
 )
-from phylotorch.evolution.tree_model import UnRootedTreeModel as BaseUnRootedTreeModel
-from phylotorch.typing import ID
-from torch import Tensor
+from torchtree.evolution.tree_model import UnRootedTreeModel as BaseUnRootedTreeModel
+from torchtree.typing import ID
 
 
 class GeneralNodeHeightTransform(
-    phylotorch.evolution.tree_model.GeneralNodeHeightTransform
+    torchtree.evolution.tree_model.GeneralNodeHeightTransform
 ):
     r"""
     Transform from ratios to node heights.
