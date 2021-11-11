@@ -7,12 +7,37 @@ from timeit import default_timer as timer
 
 import bito
 import bito.beagle_flags as beagle_flags
+import dendropy
 import numpy as np
 import torch
-from torchtree.evolution.io import read_tree
+from dendropy import Tree
+from torchtree.evolution.tree_model import setup_dates, setup_indexes
 
 from bitorch.tree_likelihood import TreeLikelihoodAutogradFunction
 from bitorch.tree_model import NodeHeightAutogradFunction
+
+
+def read_tree(tree, dated=True, heterochornous=True):
+    taxa = dendropy.TaxonNamespace()
+    tree_format = 'newick'
+    with open(tree) as fp:
+        if next(fp).upper().startswith('#NEXUS'):
+            tree_format = 'nexus'
+
+    tree = Tree.get(
+        path=tree,
+        schema=tree_format,
+        tree_offset=0,
+        taxon_namespace=taxa,
+        preserve_underscores=True,
+        rooting='force-rooted',
+    )
+    tree.resolve_polytomies(update_bipartitions=True)
+    setup_indexes(tree)
+    if dated:
+        setup_dates(tree, heterochornous)
+
+    return tree
 
 
 def create_instance(rooted, tree, args):
@@ -20,19 +45,11 @@ def create_instance(rooted, tree, args):
         inst = bito.rooted_instance('id_')
     else:
         inst = bito.unrooted_instance('id_')
-
-    if tree.is_rooted and not rooted:
-        # bito expects a trifurcation at the root if the tree is unrooted
-        tmp = tempfile.NamedTemporaryFile(mode='w', delete=False)
-        tree2 = tree.clone(2)
-        tree2.deroot()
-        tmp.write(str(tree2) + ';')
-        tmp.close()
-        inst.read_newick_file(tmp.name)
-        os.unlink(tmp.name)
-    else:
-        inst.read_newick_file(args.tree)
-
+    tmp = tempfile.NamedTemporaryFile(mode='w', delete=False)
+    tmp.write(str(tree) + ';')
+    tmp.close()
+    inst.read_newick_file(tmp.name)
+    os.unlink(tmp.name)
     inst.read_fasta_file(args.input)
 
     if rooted:
@@ -85,29 +102,68 @@ def gradient_tree_likelihood(inst, branch_lengths):
         None,
         True,
     )
-    return log_prob.backward()
+    log_prob.backward()
+    return log_prob
 
 
 def unrooted_treelikelihood(args):
     tree = read_tree(args.tree, False, False)
+    tree.collapse_basal_bifurcation()
 
     inst = create_instance(False, tree, args)
 
     branch_lengths = torch.tensor(
         np.array(inst.tree_collection.trees[0].branch_lengths)[:-1]
     ).unsqueeze(0)
-    branch_lengths = branch_lengths * 0.001
+    branch_lengths = branch_lengths * args.scaler
+    branch_lengths = torch.clamp(branch_lengths, min=1.0e-6)
 
     total_time, log_prob = tree_likelihood(args.replicates, inst, branch_lengths)
     print(f'  {args.replicates} evaluations: {total_time} ({log_prob})')
 
     branch_lengths.requires_grad = True
-    grad_total_time, _ = gradient_tree_likelihood(args.replicates, inst, branch_lengths)
+    grad_total_time, grad_log_prob = gradient_tree_likelihood(
+        args.replicates, inst, branch_lengths
+    )
     print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
 
     if args.output:
-        args.output.write(f"treelikelihood,evaluation,off,{total_time}\n")
-        args.output.write(f"treelikelihood,gradient,off,{grad_total_time}\n")
+        args.output.write(
+            f"treelikelihood,evaluation,off,{total_time},{log_prob.squeeze().item()}\n"
+        )
+        args.output.write(
+            f"treelikelihood,gradient,off,{grad_total_time},"
+            f"{grad_log_prob.squeeze().item()}\n"
+        )
+
+    if torch.any(torch.isinf(log_prob)):
+        inst.set_rescaling(True)
+        total_time_r, log_prob_r = tree_likelihood(
+            args.replicates, inst, branch_lengths
+        )
+        print(
+            f'  {args.replicates} evaluations rescaled: {total_time_r}'
+            f' ({log_prob_r.squeeze().item()})'
+        )
+
+        branch_lengths.requires_grad = True
+        grad_total_time_r, grad_log_prob_r = gradient_tree_likelihood(
+            args.replicates, inst, branch_lengths
+        )
+        print(
+            f'  {args.replicates} gradient evaluations rescaled: {grad_total_time_r}'
+            f' ({grad_log_prob_r.squeeze().item()})'
+        )
+
+        if args.output:
+            args.output.write(
+                f"treelikelihood_rescaled,evaluation,off,{total_time_r},"
+                f"{log_prob_r.squeeze().item()}\n"
+            )
+            args.output.write(
+                f"treelikelihood_rescaled,gradient,off,{grad_total_time_r},"
+                f"{grad_log_prob_r.squeeze().item()}\n"
+            )
 
 
 @benchmark
@@ -158,8 +214,28 @@ def gradient_transform_jacobian(inst, branch_lengths):
     )
 
 
+def heights_from_branch_lengths(tree, eps=1.0e-6):
+    heights = torch.empty(2 * len(tree.taxon_namespace) - 1)
+    for node in tree.postorder_node_iter():
+        if node.is_leaf():
+            heights[node.index] = node.date
+        else:
+            heights[node.index] = max(
+                [
+                    heights[c.index] + max(eps, c.edge_length)
+                    for c in node.child_node_iter()
+                ]
+            )
+    return heights
+
+
 def ratio_transform_jacobian(args):
     tree = read_tree(args.tree, True, True)
+
+    heights = heights_from_branch_lengths(tree).tolist()
+    for n in tree.postorder_internal_node_iter():
+        for c in n.child_nodes():
+            c.edge_length = heights[n.index] - heights[c.index]
 
     inst = create_instance(True, tree, args)
 
@@ -168,14 +244,16 @@ def ratio_transform_jacobian(args):
     total_time, log_p = transform_jacobian(args.replicates, inst, branch_lengths)
     print(f'  {args.replicates} evaluations: {total_time} ({log_p})')
 
-    grad_total_time, _ = gradient_transform_jacobian(
+    grad_total_time, grad_log_p = gradient_transform_jacobian(
         args.replicates, inst, branch_lengths
     )
     print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
 
     if args.output:
-        args.output.write(f"ratio_transform_jacobian,evaluation,off,{total_time}\n")
-        args.output.write(f"ratio_transform_jacobian,gradient,off,{grad_total_time}\n")
+        args.output.write(
+            f"ratio_transform_jacobian,evaluation,off,{total_time},{log_p}\n"
+        )
+        args.output.write(f"ratio_transform_jacobian,gradient,off,{grad_total_time},\n")
 
 
 parser = argparse.ArgumentParser()
@@ -196,12 +274,19 @@ parser.add_argument(
     help="""csv output file""",
 )
 parser.add_argument(
+    "-s",
+    "--scaler",
+    type=float,
+    default=1.0,
+    help="""scale branch lengths""",
+)
+parser.add_argument(
     '--debug', required=False, action='store_true', help="""Debug mode"""
 )
 args = parser.parse_args()
 
 if args.output:
-    args.output.write("function,mode,JIT,time\n")
+    args.output.write("function,mode,JIT,time,logprob\n")
 
 print('Tree likelihood unrooted:')
 unrooted_treelikelihood(args)
