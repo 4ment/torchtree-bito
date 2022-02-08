@@ -40,7 +40,7 @@ def read_tree(tree, dated=True, heterochornous=True):
     return tree
 
 
-def create_instance(rooted, tree, args):
+def create_instance(rooted, tree, args, subst_model='JC69'):
     if rooted:
         inst = bito.rooted_instance('id_')
     else:
@@ -56,7 +56,7 @@ def create_instance(rooted, tree, args):
         inst.parse_dates_from_taxon_names(True)
 
     spec = bito.PhyloModelSpecification(
-        substitution='JC69', site='constant', clock='strict'
+        substitution=subst_model, site='constant', clock='strict'
     )
 
     inst.prepare_for_phylo_likelihood(spec, 1, [beagle_flags.VECTOR_SSE], False)
@@ -76,14 +76,14 @@ def benchmark(f):
 
 
 @benchmark
-def tree_likelihood(inst, branch_lengths):
+def tree_likelihood(inst, branch_lengths, rates=None, frequencies=None):
     treelike = TreeLikelihoodAutogradFunction.apply
     log_prob = treelike(
         inst,
         branch_lengths,
         None,
-        None,
-        None,
+        rates,
+        frequencies,
         None,
         False,
     )
@@ -91,14 +91,14 @@ def tree_likelihood(inst, branch_lengths):
 
 
 @benchmark
-def gradient_tree_likelihood(inst, branch_lengths):
+def gradient_tree_likelihood(inst, branch_lengths, rates=None, frequencies=None):
     treelike = TreeLikelihoodAutogradFunction.apply
     log_prob = treelike(
         inst,
         branch_lengths,
         None,
-        None,
-        None,
+        rates,
+        frequencies,
         None,
         True,
     )
@@ -106,11 +106,11 @@ def gradient_tree_likelihood(inst, branch_lengths):
     return log_prob
 
 
-def unrooted_treelikelihood(args):
+def unrooted_treelikelihood(args, subst_model):
     tree = read_tree(args.tree, False, False)
     tree.collapse_basal_bifurcation()
 
-    inst = create_instance(False, tree, args)
+    inst = create_instance(False, tree, args, subst_model)
 
     branch_lengths = torch.tensor(
         np.array(inst.tree_collection.trees[0].branch_lengths)[:-1]
@@ -118,12 +118,25 @@ def unrooted_treelikelihood(args):
     branch_lengths = branch_lengths * args.scaler
     branch_lengths = torch.clamp(branch_lengths, min=1.0e-6)
 
-    total_time, log_prob = tree_likelihood(args.replicates, inst, branch_lengths)
+    if subst_model == 'GTR':
+        rates = torch.full((1, 5), 0.0)
+        frequencies = torch.full((1, 3), 0.0)
+    else:
+        rates = None
+        frequencies = None
+
+    total_time, log_prob = tree_likelihood(
+        args.replicates, inst, branch_lengths, rates, frequencies
+    )
     print(f'  {args.replicates} evaluations: {total_time} ({log_prob})')
 
     branch_lengths.requires_grad = True
+    if subst_model == 'GTR':
+        rates.requires_grad = True
+        frequencies.requires_grad = True
+
     grad_total_time, grad_log_prob = gradient_tree_likelihood(
-        args.replicates, inst, branch_lengths
+        args.replicates, inst, branch_lengths, rates, frequencies
     )
     print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
 
@@ -283,14 +296,26 @@ parser.add_argument(
 parser.add_argument(
     '--debug', required=False, action='store_true', help="""Debug mode"""
 )
+parser.add_argument(
+    '--gtr',
+    required=False,
+    action='store_true',
+    help="""Include gradient calculation of GTR parameters""",
+)
 args = parser.parse_args()
 
 if args.output:
     args.output.write("function,mode,JIT,time,logprob\n")
 
 print('Tree likelihood unrooted:')
-unrooted_treelikelihood(args)
+print('JC69')
+unrooted_treelikelihood(args, 'JC69')
 print()
+
+if args.gtr:
+    print('GTR')
+    unrooted_treelikelihood(args, 'GTR')
+    print()
 
 try:
     print('Height transform log det Jacobian:')
