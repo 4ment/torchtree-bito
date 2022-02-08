@@ -14,13 +14,16 @@ from torchtree.core.utils import JSONParseError, process_object
 from torchtree.evolution.alignment import Alignment
 from torchtree.evolution.branch_model import BranchModel
 from torchtree.evolution.site_model import SiteModel
-from torchtree.evolution.substitution_model import SubstitutionModel
+from torchtree.evolution.site_pattern import SitePattern
+from torchtree.evolution.substitution_model.abstract import SubstitutionModel
 from torchtree.evolution.tree_model import (
     ReparameterizedTimeTreeModel,
     TreeModel,
     UnRootedTreeModel,
 )
 from torchtree.typing import ID
+
+from bitorch.utils import flatten_2D
 
 
 class TreeLikelihoodModel(CallableModel):
@@ -32,6 +35,7 @@ class TreeLikelihoodModel(CallableModel):
         subst_model: SubstitutionModel,
         site_model: SiteModel,
         clock_model: BranchModel = None,
+        thread_count=1,
     ):
         super().__init__(id_)
         self.inst = inst
@@ -39,6 +43,7 @@ class TreeLikelihoodModel(CallableModel):
         self.subst_model = subst_model
         self.site_model = site_model
         self.clock_model = clock_model
+        self.thread_count = thread_count
         self.rescale = False
 
     def _call(self):
@@ -68,15 +73,22 @@ class TreeLikelihoodModel(CallableModel):
         elif hasattr(self.subst_model, '_kappa'):
             subst_rates = self.subst_model.kappa
 
-        log_P = treelike(
-            self.inst,
-            branch_parameters,
-            clock_rate,
-            subst_rates,
-            subst_frequencies,
-            weibull_shape,
-            requires_grad,
-        )
+        while True:
+            log_P = treelike(
+                self.inst,
+                branch_parameters,
+                clock_rate,
+                subst_rates,
+                subst_frequencies,
+                weibull_shape,
+                requires_grad,
+                self.thread_count,
+            )
+            if not self.rescale and torch.any(torch.isinf(log_P)):
+                self.inst.set_rescaling(True)
+                self.rescale = True
+            else:
+                break
         return log_P
 
     def handle_model_changed(self, model, obj, index):
@@ -123,12 +135,12 @@ class TreeLikelihoodModel(CallableModel):
                 os.unlink(tmp.name)
 
         # Ignore site_pattern and parse alignment instead
-        if 'file' in data['site_pattern']['alignment']:
-            inst.read_fasta_file(data['site_pattern']['alignment']['file'])
-        elif 'sequences' in data['site_pattern']['alignment']:
+
+        # alignment is a reference to an object already parsed
+        if isinstance(data[SitePattern.tag]['alignment'], str):
             tmp = tempfile.NamedTemporaryFile(mode='w', delete=False)
             try:
-                alignment = Alignment.from_json(data['site_pattern']['alignment'], dic)
+                alignment = dic[data[SitePattern.tag]['alignment']]
                 for idx, sequence in enumerate(alignment):
                     tmp.write('>' + sequence.taxon + '\n')
                     tmp.write(sequence.sequence + '\n')
@@ -136,6 +148,23 @@ class TreeLikelihoodModel(CallableModel):
                 tmp.close()
                 inst.read_fasta_file(tmp.name)
                 os.unlink(tmp.name)
+        # alignment contains a file entry
+        elif 'file' in data[SitePattern.tag]['alignment']:
+            inst.read_fasta_file(data[SitePattern.tag]['alignment']['file'])
+        # alignment contains a dictionary of sequences
+        elif 'sequences' in data[SitePattern.tag]['alignment']:
+            tmp = tempfile.NamedTemporaryFile(mode='w', delete=False)
+            try:
+                alignment = Alignment.from_json(data[SitePattern.tag]['alignment'], dic)
+                for idx, sequence in enumerate(alignment):
+                    tmp.write('>' + sequence.taxon + '\n')
+                    tmp.write(sequence.sequence + '\n')
+            finally:
+                tmp.close()
+                inst.read_fasta_file(tmp.name)
+                os.unlink(tmp.name)
+        else:
+            raise JSONParseError('site_pattern is misspecified')
 
         model_name = data[SubstitutionModel.tag]['type'].split('.')[-1]
         if model_name not in ('JC69', 'HKY', 'GTR'):
@@ -149,7 +178,7 @@ class TreeLikelihoodModel(CallableModel):
 
         if clock_model:
             clock_name = 'strict'
-            if torch.max(tree_model.bounds) == 0.0:
+            if torch.max(tree_model.sampling_times) == 0.0:
                 inst.set_dates_to_be_constant(False)
             else:
                 inst.parse_dates_from_taxon_names(False)
@@ -162,11 +191,13 @@ class TreeLikelihoodModel(CallableModel):
             )
 
         inst.prepare_for_phylo_likelihood(
-            spec, thread_count, [beagle_flags.VECTOR_SSE], False
+            spec, thread_count, [beagle_flags.VECTOR_SSE], False, thread_count
         )
 
         tree_model.inst = inst
-        return cls(id_, inst, tree_model, subst_model, site_model, clock_model)
+        return cls(
+            id_, inst, tree_model, subst_model, site_model, clock_model, thread_count
+        )
 
 
 Gradient = namedtuple(
@@ -184,55 +215,57 @@ Gradient = namedtuple(
 class TreeLikelihoodAutogradFunction(torch.autograd.Function):
     @staticmethod
     def update_bito(
-        inst,
-        branch_lengths,
-        clock_rates,
-        subst_rates,
-        subst_frequencies,
-        weibull_shape,
-        batch_idx=0,
+        inst, branch_lengths, clock_rates, subst_rates, subst_frequencies, weibull_shape
     ):
         phylo_model_param_block_map = inst.get_phylo_model_param_block_map()
 
+        tree_count = len(inst.tree_collection.trees)
+
         if clock_rates is not None:
             # Set ratios in tree
-            inst.tree_collection.trees[0].initialize_time_tree_using_height_ratios(
-                branch_lengths[batch_idx, :].detach().numpy()
-            )
-            # Set clock rate in tree
-            # inst.tree_collection.trees[0].set_relaxed_clock(clock_rates)
-            # inst.tree_collection.trees[0].set_strict_clock(clock_rates)
-            inst_rates = np.array(inst.tree_collection.trees[0].rates, copy=False)
-            inst_rates[:] = clock_rates[batch_idx, :].detach().numpy()
-            # bito does not use phylo_model_param_block_map for clock rates
-            # phylo_model_param_block_map["clock rate"][:] = clock.detach().numpy()
+            for idx in range(tree_count):
+                inst.tree_collection.trees[
+                    idx
+                ].initialize_time_tree_using_height_ratios(
+                    branch_lengths[idx].detach().numpy()
+                )
+                # Set clock rate in tree
+                inst_rates = np.array(inst.tree_collection.trees[idx].rates, copy=False)
+                inst_rates[:] = clock_rates[idx].detach().numpy()
         else:
-            inst_branch_lengths = np.array(
-                inst.tree_collection.trees[0].branch_lengths, copy=False
-            )
-            inst_branch_lengths[:-1] = branch_lengths[batch_idx, :].detach().numpy()
+            for idx in range(tree_count):
+                inst_branch_lengths = np.array(
+                    inst.tree_collection.trees[idx].branch_lengths, copy=False
+                )
+                inst_branch_lengths[:-1] = branch_lengths.detach().numpy()
 
         if weibull_shape is not None:
-            phylo_model_param_block_map["Weibull shape"][:] = (
-                weibull_shape[batch_idx, :].detach().numpy()
-            )
+            for idx in range(tree_count):
+                phylo_model_param_block_map["Weibull shape"][:] = (
+                    weibull_shape[idx].detach().numpy()
+                )
 
         if subst_rates is not None:
+            # HKY
             if subst_rates.shape[-1] == 1:
-                phylo_model_param_block_map["substitution model rates"][:] = (
-                    subst_rates[batch_idx, :].detach().numpy()
-                )
+                for idx in range(tree_count):
+                    phylo_model_param_block_map["substitution model rates"][:] = (
+                        subst_rates[idx].detach().numpy()
+                    )
+            # GTR
             else:
                 t = StickBreakingTransform()
-                phylo_model_param_block_map["substitution model rates"][:] = t(
-                    subst_rates[batch_idx, :].detach()
-                ).numpy()
+                for idx in range(tree_count):
+                    phylo_model_param_block_map["substitution model rates"][:] = t(
+                        subst_rates[idx].detach()
+                    ).numpy()
 
         if subst_frequencies is not None:
             t = StickBreakingTransform()
-            phylo_model_param_block_map["substitution model frequencies"][:] = t(
-                subst_frequencies[batch_idx, :].detach()
-            ).numpy()
+            for idx in range(tree_count):
+                phylo_model_param_block_map["substitution model frequencies"][:] = t(
+                    subst_frequencies[idx].detach()
+                ).numpy()
 
     @staticmethod
     def calculate_gradient(
@@ -243,34 +276,49 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
         subst_frequencies_grad = None
         weibull_grad = None
 
-        bito_result = inst.phylo_gradients()[0]
+        tree_count = len(inst.tree_collection.trees)
+
+        bito_result = inst.phylo_gradients()
 
         if clock_rates is not None:
-            branch_grad = torch.tensor(
-                np.array(bito_result.gradient['ratios_root_height'])
-            )
-            clock_rate_grad = torch.tensor(
-                np.array(bito_result.gradient['clock_model'])
-            )
+            branch_grad = []
+            clock_rate_grad = []
+            for idx in range(tree_count):
+                branch_grad.append(
+                    np.array(bito_result[idx].gradient['ratios_root_height'])
+                )
+                clock_rate_grad.append(
+                    np.array(bito_result[idx].gradient['clock_model'])
+                )
+            branch_grad = torch.tensor(np.stack(branch_grad))
+            clock_rate_grad = torch.tensor(np.stack(clock_rate_grad))
         else:
-            branch_grad = torch.tensor(
-                np.array(bito_result.gradient['branch_lengths'])[:-2]
-            )
+            branch_grad = []
+            for idx in range(tree_count):
+                branch_grad = np.array(bito_result[idx].gradient['branch_lengths'])[:-2]
+            branch_grad = torch.tensor(np.stack(branch_grad))
 
         if subst_rates is not None:
-            substitution_model_grad = np.array(
-                bito_result.gradient['substitution_model']
-            )
-            subst_rates_grad = torch.tensor(substitution_model_grad[:-3])
+            subst_rates_grad = []
+            for idx in range(tree_count):
+                subst_rates_grad.append(
+                    np.array(bito_result[idx].gradient['substitution_model'])[:-3]
+                )
+            subst_rates_grad = torch.tensor(np.stack(subst_rates_grad))
 
         if subst_frequencies is not None:
-            substitution_model_grad = np.array(
-                bito_result.gradient['substitution_model']
-            )
-            subst_frequencies_grad = torch.tensor(substitution_model_grad[-3:])
+            subst_frequencies_grad = []
+            for idx in range(tree_count):
+                subst_frequencies_grad.append(
+                    np.array(bito_result[idx].gradient['substitution_model'])[-3:]
+                )
+            subst_frequencies_grad = torch.tensor(np.stack(subst_frequencies_grad))
 
         if weibull_shape is not None:
-            weibull_grad = torch.tensor(np.array(bito_result.gradient['site_model']))
+            weibull_grad = []
+            for idx in range(tree_count):
+                weibull_grad.append(np.array(bito_result[idx].gradient['site_model']))
+            weibull_grad = torch.tensor(np.stack(weibull_grad))
 
         return Gradient(
             branch_grad,
@@ -290,8 +338,10 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
         subst_frequencies=None,
         weibull_shape=None,
         save_grad=False,
+        thread_count=1,
     ):
         ctx.inst = inst
+        ctx.thread_count = thread_count
         ctx.time = clock_rates is not None
         ctx.weibull = weibull_shape is not None
         ctx.subst_rates = subst_rates is not None
@@ -303,31 +353,41 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
         log_p = []
         all_grad = []
 
-        for batch_idx in range(branch_lengths.shape[0]):
+        branch_lengths2 = flatten_2D(branch_lengths)
+        clock_rates2 = flatten_2D(clock_rates)
+        subst_rates2 = flatten_2D(subst_rates)
+        subst_frequencies2 = flatten_2D(subst_frequencies)
+        weibull_shape2 = flatten_2D(weibull_shape)
+
+        for batch_idx in range(0, branch_lengths2.shape[0], thread_count):
+            end_idx = batch_idx + thread_count
+            params = [
+                None if p is None else p[batch_idx:end_idx]
+                for p in (
+                    branch_lengths2,
+                    clock_rates2,
+                    subst_rates2,
+                    subst_frequencies2,
+                    weibull_shape2,
+                )
+            ]
             TreeLikelihoodAutogradFunction.update_bito(
                 inst,
-                branch_lengths,
-                clock_rates,
-                subst_rates,
-                subst_frequencies,
-                weibull_shape,
-                batch_idx,
+                *params,
             )
             if save_grad:
                 grads = TreeLikelihoodAutogradFunction.calculate_gradient(
                     inst,
-                    branch_lengths,
-                    clock_rates,
-                    subst_rates,
-                    subst_frequencies,
-                    weibull_shape,
+                    *params,
                 )
                 all_grad.append(grads)
+            log_p.append(torch.tensor(np.array(inst.log_likelihoods())))
 
-            log_p.append(torch.tensor(np.array(inst.log_likelihoods())[0]))
-
+        log_p = torch.concat(log_p, 0)
+        if len(branch_lengths.shape[:-1]) > 1:
+            log_p = log_p.view(branch_lengths.shape[:-1])
         ctx.grads = all_grad if save_grad else None
-        return torch.stack(log_p)
+        return log_p
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -343,55 +403,63 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
             all_grads = ctx.grads
         else:
             all_grads = []
-            for batch_idx in range(grad_output.shape[0]):
+            branch_lengths2 = flatten_2D(branch_lengths)
+            clock_rates2 = flatten_2D(clock_rates)
+            subst_rates2 = flatten_2D(subst_rates)
+            subst_frequencies2 = flatten_2D(subst_frequencies)
+            weibull_shape2 = flatten_2D(weibull_shape)
+
+            for batch_idx in range(0, branch_lengths2.shape[0], ctx.thread_count):
+                end_idx = batch_idx + ctx.thread_count
+                params = [
+                    None if p is None else p[batch_idx:end_idx]
+                    for p in (
+                        branch_lengths2,
+                        clock_rates2,
+                        subst_rates2,
+                        subst_frequencies2,
+                        weibull_shape2,
+                    )
+                ]
                 if grad_output.shape[0] > 1:
                     TreeLikelihoodAutogradFunction.update_bito(
                         ctx.inst,
-                        branch_lengths,
-                        clock_rates,
-                        subst_rates,
-                        subst_frequencies,
-                        weibull_shape,
-                        batch_idx,
+                        *params,
                     )
                 grads = TreeLikelihoodAutogradFunction.calculate_gradient(
                     ctx.inst,
-                    branch_lengths,
-                    clock_rates,
-                    subst_rates,
-                    subst_frequencies,
-                    weibull_shape,
+                    *params,
                 )
                 all_grads.append(grads)
 
-        branch_grad = torch.stack(
-            list(map(lambda x: x.branch_lengths, ctx.grads))
+        branch_grad = torch.cat(
+            list(map(lambda x: x.branch_lengths, all_grads))
         ) * grad_output.unsqueeze(-1)
 
         if ctx.time:
-            clock_rate_grad = torch.stack(
-                list(map(lambda x: x.clocks_rate, ctx.grads))
+            clock_rate_grad = torch.cat(
+                list(map(lambda x: x.clock_rates, all_grads))
             ) * grad_output.unsqueeze(-1)
         else:
             clock_rate_grad = None
 
         if ctx.subst_rates:
-            subst_rates_grad = torch.stack(
-                list(map(lambda x: x.subst_rates, ctx.grads))
+            subst_rates_grad = torch.cat(
+                list(map(lambda x: x.subst_rates, all_grads))
             ) * grad_output.unsqueeze(-1)
         else:
             subst_rates_grad = None
 
         if ctx.subst_frequencies:
-            subst_frequencies_grad = torch.stack(
-                list(map(lambda x: x.subst_frequencies, ctx.grads))
+            subst_frequencies_grad = torch.cat(
+                list(map(lambda x: x.subst_frequencies, all_grads))
             ) * grad_output.unsqueeze(-1)
         else:
             subst_frequencies_grad = None
 
         if ctx.weibull:
-            weibull_grad = torch.stack(
-                list(map(lambda x: x.weibull_shape, ctx.grads))
+            weibull_grad = torch.cat(
+                list(map(lambda x: x.weibull_shape, all_grads))
             ) * grad_output.unsqueeze(-1)
         else:
             weibull_grad = None
@@ -403,5 +471,6 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
             subst_rates_grad,
             subst_frequencies_grad,
             weibull_grad,
+            None,
             None,
         )

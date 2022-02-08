@@ -11,6 +11,8 @@ from torchtree.evolution.tree_model import (
 from torchtree.evolution.tree_model import UnRootedTreeModel as BaseUnRootedTreeModel
 from torchtree.typing import ID
 
+from bitorch.utils import flatten_2D
+
 
 class GeneralNodeHeightTransform(
     torchtree.evolution.tree_model.GeneralNodeHeightTransform
@@ -44,8 +46,11 @@ class NodeHeightAutogradFunction(torch.autograd.Function):
     def forward(ctx, inst, ratios_root_height):
         ctx.inst = inst
         node_heights = []
-        params_numpy = ratios_root_height.detach().numpy()
-        for batch_idx in range(ratios_root_height.shape[0]):
+
+        tensor_flatten = flatten_2D(ratios_root_height)
+
+        params_numpy = tensor_flatten.detach().numpy()
+        for batch_idx in range(tensor_flatten.shape[0]):
             inst.tree_collection.trees[0].initialize_time_tree_using_height_ratios(
                 params_numpy[batch_idx, ...]
             )
@@ -56,13 +61,17 @@ class NodeHeightAutogradFunction(torch.autograd.Function):
                     ]
                 )
             )
-        return torch.stack(node_heights)
+        node_heights = torch.stack(node_heights)
+        if len(ratios_root_height.shape) != node_heights.shape:
+            node_heights = node_heights.view(ratios_root_height.shape)
+        return node_heights
 
     @staticmethod
     def backward(ctx, grad_output):
         grad = []
-        grad_output_numpy = grad_output.numpy()
-        for batch_idx in range(grad_output.shape[0]):
+        tensor_flatten = flatten_2D(grad_output)
+        grad_output_numpy = tensor_flatten.numpy()
+        for batch_idx in range(tensor_flatten.shape[0]):
             grad.append(
                 torch.tensor(
                     bito.ratio_gradient_of_height_gradient(
@@ -71,7 +80,10 @@ class NodeHeightAutogradFunction(torch.autograd.Function):
                     )
                 )
             )
-        return None, torch.stack(grad)
+        grad = torch.stack(grad)
+        if grad.shape != grad_output.shape:
+            grad = grad.view(grad_output.shape)
+        return None, grad
 
 
 class ReparameterizedTimeTreeModel(BaseReparameterizedTimeTreeModel):
