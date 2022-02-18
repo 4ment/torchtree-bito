@@ -240,32 +240,28 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                 inst_branch_lengths[:-1] = branch_lengths.detach().numpy()
 
         if weibull_shape is not None:
-            for idx in range(tree_count):
-                phylo_model_param_block_map["Weibull shape"][:] = (
-                    weibull_shape[idx].detach().numpy()
-                )
+            phylo_model_param_block_map["Weibull shape"][
+                :
+            ] = weibull_shape.detach().numpy()
 
         if subst_rates is not None:
             # HKY
             if subst_rates.shape[-1] == 1:
-                for idx in range(tree_count):
-                    phylo_model_param_block_map["substitution model rates"][:] = (
-                        subst_rates[idx].detach().numpy()
-                    )
+                phylo_model_param_block_map["substitution model rates"][
+                    :
+                ] = subst_rates.detach().numpy()
             # GTR
             else:
                 t = StickBreakingTransform()
-                for idx in range(tree_count):
-                    phylo_model_param_block_map["substitution model rates"][:] = t(
-                        subst_rates[idx].detach()
-                    ).numpy()
+                phylo_model_param_block_map["substitution model rates"][:] = t(
+                    subst_rates.detach()
+                ).numpy()
 
         if subst_frequencies is not None:
             t = StickBreakingTransform()
-            for idx in range(tree_count):
-                phylo_model_param_block_map["substitution model frequencies"][:] = t(
-                    subst_frequencies[idx].detach()
-                ).numpy()
+            phylo_model_param_block_map["substitution model frequencies"][:] = t(
+                subst_frequencies.detach()
+            ).numpy()
 
     @staticmethod
     def calculate_gradient(
