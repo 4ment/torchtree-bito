@@ -142,10 +142,11 @@ def unrooted_treelikelihood(args, subst_model):
 
     if args.output:
         args.output.write(
-            f"treelikelihood,evaluation,off,{total_time},{log_prob.squeeze().item()}\n"
+            f"treelikelihood{subst_model},evaluation,off,{total_time},"
+            f"{log_prob.squeeze().item()}\n"
         )
         args.output.write(
-            f"treelikelihood,gradient,off,{grad_total_time},"
+            f"treelikelihood{subst_model},gradient,off,{grad_total_time},"
             f"{grad_log_prob.squeeze().item()}\n"
         )
 
@@ -170,12 +171,12 @@ def unrooted_treelikelihood(args, subst_model):
 
         if args.output:
             args.output.write(
-                f"treelikelihood_rescaled,evaluation,off,{total_time_r},"
+                f"treelikelihood{subst_model}_rescaled,evaluation,off,{total_time_r},"
                 f"{log_prob_r.squeeze().item()}\n"
             )
             args.output.write(
-                f"treelikelihood_rescaled,gradient,off,{grad_total_time_r},"
-                f"{grad_log_prob_r.squeeze().item()}\n"
+                f"treelikelihood{subst_model}_rescaled,gradient,off,"
+                f"{grad_total_time_r},{grad_log_prob_r.squeeze().item()}\n"
             )
 
 
