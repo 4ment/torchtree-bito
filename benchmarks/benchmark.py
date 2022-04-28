@@ -199,30 +199,32 @@ def ratio_transform(args):
 
     inst = create_instance(True, tree, args)
 
-    branch_lengths = torch.tensor(np.array(inst.tree_collection.trees[0].height_ratios))
-    branch_lengths = branch_lengths.unsqueeze(0)
+    root_height_ratios = torch.tensor(
+        np.array(inst.tree_collection.trees[0].height_ratios)
+    )
+    root_height_ratios = root_height_ratios.unsqueeze(0)
 
-    total_time, _ = ratio_transform_fn(args.replicates, inst, branch_lengths)
+    total_time, _ = ratio_transform_fn(args.replicates, inst, root_height_ratios)
     print(f'  {args.replicates} evaluations: {total_time}')
 
-    branch_lengths.requires_grad = True
-    total_time, _ = gradient_ratio_transform_fn(args.replicates, inst, branch_lengths)
-    print(f'  {args.replicates} gradient evaluations: {total_time}')
+    root_height_ratios.requires_grad = True
+    grad_total_time, _ = gradient_ratio_transform_fn(
+        args.replicates, inst, root_height_ratios
+    )
+    print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
+
+    if args.output:
+        args.output.write(f"ratio_transform,evaluation,off,{total_time},\n")
+        args.output.write(f"ratio_transform,gradient,off,{grad_total_time},\n")
 
 
 @benchmark
-def transform_jacobian(inst, branch_lengths):
-    inst.tree_collection.trees[0].initialize_time_tree_using_height_ratios(
-        branch_lengths
-    )
+def transform_jacobian(inst):
     return bito.log_det_jacobian_height_transform(inst.tree_collection.trees[0])
 
 
 @benchmark
-def gradient_transform_jacobian(inst, branch_lengths):
-    inst.tree_collection.trees[0].initialize_time_tree_using_height_ratios(
-        branch_lengths
-    )
+def gradient_transform_jacobian(inst):
     return bito.gradient_log_det_jacobian_height_transform(
         inst.tree_collection.trees[0]
     )
@@ -253,14 +255,17 @@ def ratio_transform_jacobian(args):
 
     inst = create_instance(True, tree, args)
 
-    branch_lengths = torch.tensor(np.array(inst.tree_collection.trees[0].height_ratios))
+    root_height_ratios = torch.tensor(
+        np.array(inst.tree_collection.trees[0].height_ratios)
+    )
+    inst.tree_collection.trees[0].initialize_time_tree_using_height_ratios(
+        root_height_ratios
+    )
 
-    total_time, log_p = transform_jacobian(args.replicates, inst, branch_lengths)
+    total_time, log_p = transform_jacobian(args.replicates, inst)
     print(f'  {args.replicates} evaluations: {total_time} ({log_p})')
 
-    grad_total_time, grad_log_p = gradient_transform_jacobian(
-        args.replicates, inst, branch_lengths
-    )
+    grad_total_time, grad_log_p = gradient_transform_jacobian(args.replicates, inst)
     print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
 
     if args.output:
@@ -284,7 +289,6 @@ parser.add_argument(
     "-o",
     "--output",
     type=argparse.FileType("w"),
-    default=None,
     help="""csv output file""",
 )
 parser.add_argument(
@@ -294,12 +298,9 @@ parser.add_argument(
     default=1.0,
     help="""scale branch lengths""",
 )
-parser.add_argument(
-    '--debug', required=False, action='store_true', help="""Debug mode"""
-)
+parser.add_argument('--debug', action='store_true', help="""Debug mode""")
 parser.add_argument(
     '--gtr',
-    required=False,
     action='store_true',
     help="""Include gradient calculation of GTR parameters""",
 )

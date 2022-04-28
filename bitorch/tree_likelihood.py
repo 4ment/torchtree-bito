@@ -123,7 +123,7 @@ class TreeLikelihoodModel(CallableModel):
         else:
             tmp = tempfile.NamedTemporaryFile(mode='w', delete=False)
             try:
-                if tree_model.tree.is_rooted:
+                if clock_model is None and tree_model.tree.is_rooted:
                     tree2 = tree_model.tree.clone(2)
                     tree2.deroot()
                     tmp.write(str(tree2) + ';')
