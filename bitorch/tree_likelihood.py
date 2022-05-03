@@ -5,6 +5,8 @@ from typing import Union
 
 import bito
 import bito.beagle_flags as beagle_flags
+import bito.phylo_gradient_mapkeys as gradient_keys
+import bito.phylo_model_mapkeys as model_keys
 import numpy as np
 import torch
 from torch.distributions import StickBreakingTransform
@@ -230,8 +232,11 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                     branch_lengths[idx].detach().numpy()
                 )
                 # Set clock rate in tree
-                inst_rates = np.array(inst.tree_collection.trees[idx].rates, copy=False)
-                inst_rates[:] = clock_rates[idx].detach().numpy()
+                if idx < clock_rates.shape[0]:
+                    inst_rates = np.array(
+                        inst.tree_collection.trees[idx].rates, copy=False
+                    )
+                    inst_rates[:] = clock_rates[idx].detach().numpy()
         else:
             for idx in range(tree_count):
                 inst_branch_lengths = np.array(
@@ -240,28 +245,28 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                 inst_branch_lengths[:-1] = branch_lengths.detach().numpy()
 
         if weibull_shape is not None:
-            phylo_model_param_block_map["Weibull shape"][
+            phylo_model_param_block_map[model_keys.SITE_MODEL][
                 :
             ] = weibull_shape.detach().numpy()
 
         if subst_rates is not None:
             # HKY
             if subst_rates.shape[-1] == 1:
-                phylo_model_param_block_map["substitution model rates"][
+                phylo_model_param_block_map[model_keys.SUBSTITUTION_MODEL_RATES][
                     :
                 ] = subst_rates.detach().numpy()
             # GTR
             else:
                 t = StickBreakingTransform()
-                phylo_model_param_block_map["substitution model rates"][:] = t(
+                phylo_model_param_block_map[model_keys.SUBSTITUTION_MODEL_RATES][:] = t(
                     subst_rates.detach()
                 ).numpy()
 
         if subst_frequencies is not None:
             t = StickBreakingTransform()
-            phylo_model_param_block_map["substitution model frequencies"][:] = t(
-                subst_frequencies.detach()
-            ).numpy()
+            phylo_model_param_block_map[model_keys.SUBSTITUTION_MODEL_FREQUENCIES][
+                :
+            ] = t(subst_frequencies.detach()).numpy()
 
     @staticmethod
     def calculate_gradient(
@@ -278,27 +283,38 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
 
         if clock_rates is not None:
             branch_grad = []
-            clock_rate_grad = []
             for idx in range(tree_count):
                 branch_grad.append(
-                    np.array(bito_result[idx].gradient['ratios_root_height'])
-                )
-                clock_rate_grad.append(
-                    np.array(bito_result[idx].gradient['clock_model'])
+                    np.array(
+                        bito_result[idx].gradient[gradient_keys.RATIOS_ROOT_HEIGHT]
+                    )
                 )
             branch_grad = torch.tensor(np.stack(branch_grad))
-            clock_rate_grad = torch.tensor(np.stack(clock_rate_grad))
+
+            if clock_rates.requires_grad:
+                clock_rate_grad = []
+                for idx in range(tree_count):
+                    clock_rate_grad.append(
+                        np.array(bito_result[idx].gradient[gradient_keys.CLOCK_MODEL])
+                    )
+                clock_rate_grad = torch.tensor(np.stack(clock_rate_grad))
         else:
             branch_grad = []
             for idx in range(tree_count):
-                branch_grad = np.array(bito_result[idx].gradient['branch_lengths'])[:-2]
+                branch_grad = np.array(
+                    bito_result[idx].gradient[gradient_keys.BRANCH_LENGTHS]
+                )[:-2]
             branch_grad = torch.tensor(np.stack(branch_grad))
 
         if subst_rates is not None:
             subst_rates_grad = []
             for idx in range(tree_count):
                 subst_rates_grad.append(
-                    np.array(bito_result[idx].gradient['substitution_model'])[:-3]
+                    np.array(
+                        bito_result[idx].gradient[
+                            gradient_keys.SUBSTITUTION_MODEL_RATES
+                        ]
+                    )
                 )
             subst_rates_grad = torch.tensor(np.stack(subst_rates_grad))
 
@@ -306,14 +322,20 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
             subst_frequencies_grad = []
             for idx in range(tree_count):
                 subst_frequencies_grad.append(
-                    np.array(bito_result[idx].gradient['substitution_model'])[-3:]
+                    np.array(
+                        bito_result[idx].gradient[
+                            gradient_keys.SUBSTITUTION_MODEL_FREQUENCIES
+                        ]
+                    )
                 )
             subst_frequencies_grad = torch.tensor(np.stack(subst_frequencies_grad))
 
         if weibull_shape is not None:
             weibull_grad = []
             for idx in range(tree_count):
-                weibull_grad.append(np.array(bito_result[idx].gradient['site_model']))
+                weibull_grad.append(
+                    np.array(bito_result[idx].gradient[gradient_keys.SITE_MODEL])
+                )
             weibull_grad = torch.tensor(np.stack(weibull_grad))
 
         return Gradient(
@@ -432,7 +454,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
             list(map(lambda x: x.branch_lengths, all_grads))
         ) * grad_output.unsqueeze(-1)
 
-        if ctx.time:
+        if ctx.time and clock_rates.requires_grad:
             clock_rate_grad = torch.cat(
                 list(map(lambda x: x.clock_rates, all_grads))
             ) * grad_output.unsqueeze(-1)

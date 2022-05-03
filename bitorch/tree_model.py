@@ -22,7 +22,7 @@ class GeneralNodeHeightTransform(
     """
 
     def __init__(self, tree, inst, cache_size=0):
-        super(GeneralNodeHeightTransform, self).__init__(tree, cache_size=cache_size)
+        super().__init__(tree, cache_size=cache_size)
         self.inst = inst
 
     def _call(self, x):
