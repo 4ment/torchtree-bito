@@ -93,9 +93,6 @@ class TreeLikelihoodModel(CallableModel):
                 break
         return log_P
 
-    def handle_model_changed(self, model, obj, index):
-        self.fire_model_changed()
-
     def handle_parameter_changed(self, variable, index, event):
         pass
 
@@ -112,6 +109,7 @@ class TreeLikelihoodModel(CallableModel):
         site_model = process_object(data[SiteModel.tag], dic)
         subst_model = process_object(data[SubstitutionModel.tag], dic)
         thread_count = data.get('thread_count', 1)
+        use_tip_states = data.get('use_tip_states', False)
 
         if BranchModel.tag in data:
             clock_model = process_object(data[BranchModel.tag], dic)
@@ -125,12 +123,13 @@ class TreeLikelihoodModel(CallableModel):
         else:
             tmp = tempfile.NamedTemporaryFile(mode='w', delete=False)
             try:
+                options = {'schema': 'newick', 'suppress_internal_node_labels': True}
                 if clock_model is None and tree_model.tree.is_rooted:
                     tree2 = tree_model.tree.clone(2)
                     tree2.deroot()
-                    tmp.write(str(tree2) + ';')
+                    tmp.write(tree2.as_string(**options) + ';')
                 else:
-                    tmp.write(str(tree_model.tree) + ';')
+                    tmp.write(tree_model.tree.as_string(**options) + ';')
             finally:
                 tmp.close()
                 inst.read_newick_file(tmp.name)
@@ -193,7 +192,7 @@ class TreeLikelihoodModel(CallableModel):
             )
 
         inst.prepare_for_phylo_likelihood(
-            spec, thread_count, [beagle_flags.VECTOR_SSE], False, thread_count
+            spec, thread_count, [beagle_flags.VECTOR_SSE], use_tip_states, thread_count
         )
 
         tree_model.inst = inst

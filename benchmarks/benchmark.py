@@ -220,12 +220,12 @@ def ratio_transform(args):
 
 @benchmark
 def transform_jacobian(inst):
-    return bito.log_det_jacobian_height_transform(inst.tree_collection.trees[0])
+    return bito.log_det_jacobian_of_height_transform(inst.tree_collection.trees[0])
 
 
 @benchmark
 def gradient_transform_jacobian(inst):
-    return bito.gradient_log_det_jacobian_height_transform(
+    return bito.gradient_log_det_jacobian_of_height_transform(
         inst.tree_collection.trees[0]
     )
 
