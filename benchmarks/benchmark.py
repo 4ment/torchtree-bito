@@ -319,12 +319,9 @@ if args.gtr:
     unrooted_treelikelihood(args, 'GTR')
     print()
 
-try:
-    print('Height transform log det Jacobian:')
-    ratio_transform_jacobian(args)
-    print()
-except AttributeError:
-    pass
+print('Height transform log det Jacobian:')
+ratio_transform_jacobian(args)
+print()
 
 print('Node height transform:')
 ratio_transform(args)
