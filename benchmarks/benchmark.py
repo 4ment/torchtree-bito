@@ -138,7 +138,9 @@ def unrooted_treelikelihood(args, subst_model):
     grad_total_time, grad_log_prob = gradient_tree_likelihood(
         args.replicates, inst, branch_lengths, rates, frequencies
     )
-    print(f'  {args.replicates} gradient evaluations: {grad_total_time}')
+    print(
+        f'  {args.replicates} gradient evaluations: {grad_total_time} ({grad_log_prob})'
+    )
 
     if args.output:
         args.output.write(

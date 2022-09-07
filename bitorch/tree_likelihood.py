@@ -279,6 +279,11 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
         tree_count = len(inst.tree_collection.trees)
 
         bito_result = inst.phylo_gradients()
+        options = {'dtype': branch_lengths.dtype, 'device': branch_lengths.device}
+
+        log_likelihoods = torch.tensor(
+            [tree.log_likelihood for tree in bito_result], **options
+        )
 
         if clock_rates is not None:
             branch_grad = []
@@ -288,7 +293,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                         bito_result[idx].gradient[gradient_keys.RATIOS_ROOT_HEIGHT]
                     )
                 )
-            branch_grad = torch.tensor(np.stack(branch_grad))
+            branch_grad = torch.tensor(np.stack(branch_grad), **options)
 
             if clock_rates.requires_grad:
                 clock_rate_grad = []
@@ -296,14 +301,14 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                     clock_rate_grad.append(
                         np.array(bito_result[idx].gradient[gradient_keys.CLOCK_MODEL])
                     )
-                clock_rate_grad = torch.tensor(np.stack(clock_rate_grad))
+                clock_rate_grad = torch.tensor(np.stack(clock_rate_grad), **options)
         else:
             branch_grad = []
             for idx in range(tree_count):
                 branch_grad = np.array(
                     bito_result[idx].gradient[gradient_keys.BRANCH_LENGTHS]
                 )[:-2]
-            branch_grad = torch.tensor(np.stack(branch_grad))
+            branch_grad = torch.tensor(np.stack(branch_grad), **options)
 
         if subst_rates is not None:
             subst_rates_grad = []
@@ -315,7 +320,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                         ]
                     )
                 )
-            subst_rates_grad = torch.tensor(np.stack(subst_rates_grad))
+            subst_rates_grad = torch.tensor(np.stack(subst_rates_grad), **options)
 
         if subst_frequencies is not None:
             subst_frequencies_grad = []
@@ -327,7 +332,9 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                         ]
                     )
                 )
-            subst_frequencies_grad = torch.tensor(np.stack(subst_frequencies_grad))
+            subst_frequencies_grad = torch.tensor(
+                np.stack(subst_frequencies_grad), **options
+            )
 
         if weibull_shape is not None:
             weibull_grad = []
@@ -335,9 +342,9 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                 weibull_grad.append(
                     np.array(bito_result[idx].gradient[gradient_keys.SITE_MODEL])
                 )
-            weibull_grad = torch.tensor(np.stack(weibull_grad))
+            weibull_grad = torch.tensor(np.stack(weibull_grad), **options)
 
-        return Gradient(
+        return log_likelihoods, Gradient(
             branch_grad,
             clock_rate_grad,
             subst_rates_grad,
@@ -366,6 +373,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
         ctx.save_for_backward(
             branch_lengths, clock_rates, subst_rates, subst_frequencies, weibull_shape
         )
+        options = {'dtype': branch_lengths.dtype, 'device': branch_lengths.device}
 
         log_p = []
         all_grad = []
@@ -393,12 +401,17 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                 *params,
             )
             if save_grad:
-                grads = TreeLikelihoodAutogradFunction.calculate_gradient(
+                (
+                    log_likelihoods,
+                    grads,
+                ) = TreeLikelihoodAutogradFunction.calculate_gradient(
                     inst,
                     *params,
                 )
                 all_grad.append(grads)
-            log_p.append(torch.tensor(np.array(inst.log_likelihoods())))
+                log_p.append(log_likelihoods)
+            else:
+                log_p.append(torch.tensor(np.array(inst.log_likelihoods()), **options))
 
         log_p = torch.concat(log_p, 0)
         if len(branch_lengths.shape[:-1]) > 1:
@@ -443,7 +456,7 @@ class TreeLikelihoodAutogradFunction(torch.autograd.Function):
                         ctx.inst,
                         *params,
                     )
-                grads = TreeLikelihoodAutogradFunction.calculate_gradient(
+                _, grads = TreeLikelihoodAutogradFunction.calculate_gradient(
                     ctx.inst,
                     *params,
                 )
