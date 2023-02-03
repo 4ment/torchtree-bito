@@ -4,11 +4,11 @@ from collections import namedtuple
 from typing import Union
 
 import bito
-import bito.beagle_flags as beagle_flags
 import bito.phylo_gradient_mapkeys as gradient_keys
 import bito.phylo_model_mapkeys as model_keys
 import numpy as np
 import torch
+from bito import beagle_flags
 from torch.distributions import StickBreakingTransform
 from torchtree.core.model import CallableModel
 from torchtree.core.parameter import TransformedParameter
@@ -25,7 +25,7 @@ from torchtree.evolution.tree_model import (
 )
 from torchtree.typing import ID
 
-from bitorch.utils import flatten_2D
+from torchtree_bito.utils import flatten_2D
 
 
 class TreeLikelihoodModel(CallableModel):
@@ -110,6 +110,8 @@ class TreeLikelihoodModel(CallableModel):
         subst_model = process_object(data[SubstitutionModel.tag], dic)
         thread_count = data.get('thread_count', 1)
         use_tip_states = data.get('use_tip_states', False)
+        use_bito_gpu = data.get('use_gpu', False)
+        use_sse = data.get('use_sse', True)
 
         if BranchModel.tag in data:
             clock_model = process_object(data[BranchModel.tag], dic)
@@ -142,7 +144,7 @@ class TreeLikelihoodModel(CallableModel):
             tmp = tempfile.NamedTemporaryFile(mode='w', delete=False)
             try:
                 alignment = dic[data[SitePattern.tag]['alignment']]
-                for idx, sequence in enumerate(alignment):
+                for _, sequence in enumerate(alignment):
                     tmp.write('>' + sequence.taxon + '\n')
                     tmp.write(sequence.sequence + '\n')
             finally:
@@ -190,9 +192,16 @@ class TreeLikelihoodModel(CallableModel):
             spec = bito.PhyloModelSpecification(
                 substitution=model_name, site=site_name, clock='strict'
             )
+        bito_beagle_flags = []
+        if use_bito_gpu:
+            bito_beagle_flags.append(beagle_flags.PROCESSOR_GPU)
+        elif use_sse:
+            bito_beagle_flags.append(beagle_flags.VECTOR_SSE)
+        else:
+            bito_beagle_flags.append(beagle_flags.VECTOR_NONE)
 
         inst.prepare_for_phylo_likelihood(
-            spec, thread_count, [beagle_flags.VECTOR_SSE], use_tip_states, thread_count
+            spec, thread_count, bito_beagle_flags, use_tip_states, thread_count
         )
 
         tree_model.inst = inst

@@ -11,7 +11,7 @@ from torchtree.evolution.tree_model import (
 from torchtree.evolution.tree_model import UnRootedTreeModel as BaseUnRootedTreeModel
 from torchtree.typing import ID
 
-from bitorch.utils import flatten_2D
+from torchtree_bito.utils import flatten_2D
 
 
 class GeneralNodeHeightTransform(

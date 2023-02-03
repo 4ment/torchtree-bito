@@ -13,8 +13,8 @@ import torch
 from dendropy import Tree
 from torchtree.evolution.tree_model import setup_dates, setup_indexes
 
-from bitorch.tree_likelihood import TreeLikelihoodAutogradFunction
-from bitorch.tree_model import NodeHeightAutogradFunction
+from torchtree_bito.tree_likelihood import TreeLikelihoodAutogradFunction
+from torchtree_bito.tree_model import NodeHeightAutogradFunction
 
 
 def read_tree(tree, dated=True, heterochornous=True):
