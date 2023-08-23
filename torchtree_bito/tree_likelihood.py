@@ -96,8 +96,7 @@ class TreeLikelihoodModel(CallableModel):
     def handle_parameter_changed(self, variable, index, event):
         pass
 
-    @property
-    def sample_shape(self):
+    def _sample_shape(self) -> torch.Size:
         return max([model.sample_shape for model in self.models()], key=len)
 
     @classmethod
